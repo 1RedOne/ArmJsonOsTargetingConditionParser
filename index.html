@@ -44,9 +44,23 @@
     .tiny{font-size:12px}
     .tip{border-left:3px solid #2a61ff;padding-left:10px}
     code{background:#091033;border:1px solid #223056;padding:2px 6px;border-radius:6px}
+    .context-group-0{border-left:3px solid #6aa2ff;background:rgba(106,162,255,0.05)}
+    .context-group-1{border-left:3px solid #2ecc71;background:rgba(46,204,113,0.05)}
+    .context-group-2{border-left:3px solid #f1c40f;background:rgba(241,196,15,0.05)}
+    .context-group-3{border-left:3px solid #e74c3c;background:rgba(231,76,60,0.05)}
+    .context-group-4{border-left:3px solid #9b59b6;background:rgba(155,89,182,0.05)}
+    .context-separator{height:4px;background:transparent;border:none}
+    .context-label{font-size:11px;padding:2px 6px;border-radius:4px;background:#1b2a52;color:var(--muted);font-weight:600}
+    .test-allowed{background:linear-gradient(180deg,#10341f,#0d2a19);border:1px solid #2e7d50;color:#d9ffe7}
+    .test-denied{background:linear-gradient(180deg,#2c1010,#240d0d);border:1px solid #7d2e2e;color:#ffe5e5}
+    .test-unknown{background:linear-gradient(180deg,#2c240e,#241e0c);border:1px solid #8a6d1f;color:#fff4d6}
+    .foxdeploy-home{position:fixed;top:20px;left:20px;width:60px;height:60px;background:#f1c40f;border-radius:50%;box-shadow:0 6px 10px 0 rgba(0,0,0,0.3);transition:all 0.2s ease-in-out;z-index:1000;display:flex;align-items:center;justify-content:center;text-decoration:none;border:2px solid #e67e22}
+    .foxdeploy-home:hover{box-shadow:0 6px 14px 0 rgba(241,196,15,0.6);transform:scale(1.1);text-decoration:none}
+    .foxdeploy-home::before{content:'';font-size:28px;line-height:1}
   </style>
 </head>
 <body>
+  <a href="https://www.foxdeploy.com" class="foxdeploy-home" title="Return to FoxDeploy.com" target="_blank"> <img src="http://www.foxdeploy.com/assets/images/bernieButtonSmoll.png" alt="Depicts a cute golden doodle illustration."></a>
   <div class="container">
     <header>
       <div>
@@ -91,6 +105,29 @@
 
     <div class="panel" style="margin-top:16px">
       <div class="section" style="border-top:none">
+        <h3>Configuration Tester</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr 200px;gap:16px;align-items:end;margin-bottom:16px">
+          <div>
+            <label for="testPublisher" class="muted tiny">IMAGE PUBLISHER</label>
+            <select id="testPublisher" style="width:100%;padding:8px;background:#0a1230;color:var(--text);border:1px solid #2a3865;border-radius:8px">
+              <option value="">Select a publisher...</option>
+            </select>
+          </div>
+          <div>
+            <label for="testSku" class="muted tiny">IMAGE SKU</label>
+            <input id="testSku" type="text" placeholder="e.g. 2019-Datacenter, 2008R2-SP1" style="width:100%;padding:8px;background:#0a1230;color:var(--text);border:1px solid #2a3865;border-radius:8px" list="skuSuggestions">
+            <datalist id="skuSuggestions"></datalist>
+          </div>
+          <div>
+            <button id="testBtn" class="primary" style="width:100%;padding:8px 12px">Test</button>
+          </div>
+        </div>
+        <div id="testResult" style="display:none;padding:12px;border-radius:8px;margin-bottom:16px">
+          <div id="testResultText"></div>
+          <div id="testResultDetails" class="tiny muted" style="margin-top:8px"></div>
+        </div>
+      </div>
+      <div class="section">
         <h3>Publisher Allowlist (explicit)</h3>
         <table id="allowPublishersTbl">
           <thead><tr><th>Source</th><th>Publisher(s)</th><th>Notes</th></tr></thead>
@@ -100,7 +137,7 @@
       <div class="section">
         <h3>Constraints & Patterns</h3>
         <table id="constraintsTbl">
-          <thead><tr><th>Field</th><th>Operator</th><th>Value</th><th>Context</th></tr></thead>
+          <thead><tr><th>Context</th><th>Field</th><th>Operator</th><th>Value</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -136,6 +173,13 @@
   const allowPublishersTbl = el('allowPublishersTbl').querySelector('tbody');
   const constraintsTbl = el('constraintsTbl').querySelector('tbody');
   const imageMatrixTbl = el('imageMatrixTbl').querySelector('tbody'); // NEW
+  const testPublisher = el('testPublisher');
+  const testSku = el('testSku');
+  const testBtn = el('testBtn');
+  const testResult = el('testResult');
+  const testResultText = el('testResultText');
+  const testResultDetails = el('testResultDetails');
+  const skuSuggestions = el('skuSuggestions');
 
   function safeJSON(str){
     try { return JSON.parse(str); } catch (e) { return { __error: e.message }; }
@@ -249,10 +293,50 @@
 
     // Constraints & patterns
     constraintsTbl.innerHTML='';
-    constraints.forEach(r=>{
-      const tr=document.createElement('tr');
-      tr.innerHTML = `<td><code>${r.field}</code></td><td>${r.op}</td><td>${escapeHtml(r.value)}</td><td class="muted">${r.context}</td>`;
-      constraintsTbl.appendChild(tr);
+    
+    // Group constraints by normalized context (group allOf constraints together)
+    const contextGroups = new Map();
+    
+    constraints.forEach(r => {
+      let ctx = r.context || 'root';
+      
+      // Normalize context: group allOf constraints that are siblings together
+      // Look for patterns like "allOf[0]", "allOf[1]", etc. at the end and replace with "allOf[*]"
+      // This groups sibling allOf constraints together as one logical unit
+      const normalizedCtx = ctx.replace(/\ballOf\[\d+\](?=\s*$)/, 'allOf[*]');
+      
+      if (!contextGroups.has(normalizedCtx)) {
+        contextGroups.set(normalizedCtx, []);
+      }
+      contextGroups.get(normalizedCtx).push(r);
+    });
+    
+    let groupIndex = 0;
+    contextGroups.forEach((group, context) => {
+      const groupClass = `context-group-${groupIndex % 5}`;
+      
+      group.forEach((r, idx) => {
+        const tr = document.createElement('tr');
+        tr.className = groupClass;
+        
+        // Show context label only on first row of each group
+        const contextLabel = idx === 0 
+          ? `<span class="context-label">${context === 'root' ? 'Root' : context}</span>`
+          : '';
+        
+        tr.innerHTML = `<td>${contextLabel}</td><td><code>${r.field}</code></td><td>${r.op}</td><td>${escapeHtml(r.value)}</td>`;
+        constraintsTbl.appendChild(tr);
+      });
+      
+      // Add separator row between groups (except after last group)
+      if (groupIndex < contextGroups.size - 1) {
+        const separatorTr = document.createElement('tr');
+        separatorTr.className = 'context-separator';
+        separatorTr.innerHTML = '<td colspan="4"></td>';
+        constraintsTbl.appendChild(separatorTr);
+      }
+      
+      groupIndex++;
     });
 
     // Image Matrix
@@ -289,12 +373,153 @@
     verdict.textContent = v; confidence.textContent = conf;
   }
 
+  function buildVersionSummary(parsedRules) {
+  const summary = {};
+  
+  parsedRules.forEach(rule => {
+    const publisher = rule.publisher;
+    if (!summary[publisher]) summary[publisher] = [];
+    
+    if (rule.skuLike) {
+      summary[publisher].push(`Versions like ${rule.skuLike}`);
+    }
+    if (rule.skuIn) {
+      summary[publisher].push(`Versions in [${rule.skuIn.join(", ")}]`);
+    }
+    if (rule.notLike) {
+      summary[publisher].push(`Versions NOT like ${rule.notLike}`);
+    }
+  });
+  
+  return summary;
+}
+
   function renderSignals(){
     signalsDiv.innerHTML='';
     if (!signals.length){ signalsDiv.innerHTML = '<span class="muted">No strong OS signals found.</span>'; return; }
     signals.forEach(s=>{
       const d=document.createElement('div'); d.className='pill'; d.textContent=s; signalsDiv.appendChild(d);
     });
+  }
+
+  function updateTesterOptions(){
+    // Populate publisher dropdown
+    testPublisher.innerHTML = '<option value="">Select a publisher...</option>';
+    const publishers = [...allowPublishers];
+    publishers.forEach(pub => {
+      const option = document.createElement('option');
+      option.value = pub;
+      option.textContent = pub;
+      testPublisher.appendChild(option);
+    });
+
+    // Populate SKU suggestions from constraints
+    skuSuggestions.innerHTML = '';
+    const skuValues = new Set();
+    constraints.forEach(c => {
+      if (c.field === 'Microsoft.Compute/imageSKU') {
+        const val = String(c.value).replace(/\*/g, '');
+        if (val) skuValues.add(val);
+      }
+    });
+    // Add common Windows SKUs
+    ['2019-Datacenter', '2016-Datacenter', '2012-R2-Datacenter', '2008-R2-SP1', '2022-Datacenter'].forEach(sku => skuValues.add(sku));
+    
+    skuValues.forEach(sku => {
+      const option = document.createElement('option');
+      option.value = sku;
+      skuSuggestions.appendChild(option);
+    });
+  }
+
+  function testConfiguration(){
+    const publisher = testPublisher.value.trim();
+    const sku = testSku.value.trim();
+    
+    if (!publisher || !sku) {
+      testResult.style.display = 'none';
+      return;
+    }
+
+    // Test against parsed constraints
+    let allowed = true;
+    let reasons = [];
+    let matchingConstraints = [];
+
+    // Find constraints that apply to this publisher/sku combination
+    const contextGroups = new Map();
+    constraints.forEach(r => {
+      const ctx = r.context || 'root';
+      const normalizedCtx = ctx.replace(/\ballOf\[\d+\](?=\s*$)/, 'allOf[*]');
+      if (!contextGroups.has(normalizedCtx)) {
+        contextGroups.set(normalizedCtx, []);
+      }
+      contextGroups.get(normalizedCtx).push(r);
+    });
+
+    // Test each context group
+    let hasMatchingGroup = false;
+    contextGroups.forEach((group, context) => {
+      let groupMatches = true;
+      let groupReasons = [];
+      
+      group.forEach(constraint => {
+        if (constraint.field === 'Microsoft.Compute/imagePublisher') {
+          if (constraint.op === 'equals' && constraint.value === publisher) {
+            groupReasons.push(`✓ Publisher matches: ${publisher}`);
+          } else if (constraint.op === 'in' && constraint.value.includes(publisher)) {
+            groupReasons.push(`✓ Publisher in allowed list: ${publisher}`);
+          } else if (constraint.op === 'equals' && constraint.value !== publisher) {
+            groupMatches = false;
+            groupReasons.push(`✗ Publisher must be: ${constraint.value}`);
+          }
+        }
+        
+        if (constraint.field === 'Microsoft.Compute/imageSKU') {
+          if (constraint.op === 'notLike') {
+            const pattern = constraint.value.replace(/\*/g, '.*');
+            const regex = new RegExp(`^${pattern}$`, 'i');
+            if (regex.test(sku)) {
+              groupMatches = false;
+              groupReasons.push(`✗ SKU matches excluded pattern: ${constraint.value}`);
+            } else {
+              groupReasons.push(`✓ SKU doesn't match excluded pattern: ${constraint.value}`);
+            }
+          } else if (constraint.op === 'like') {
+            const pattern = constraint.value.replace(/\*/g, '.*');
+            const regex = new RegExp(`^${pattern}$`, 'i');
+            if (regex.test(sku)) {
+              groupReasons.push(`✓ SKU matches required pattern: ${constraint.value}`);
+            } else {
+              groupMatches = false;
+              groupReasons.push(`✗ SKU must match pattern: ${constraint.value}`);
+            }
+          }
+        }
+      });
+      
+      if (groupMatches && groupReasons.some(r => r.includes('✓'))) {
+        hasMatchingGroup = true;
+        reasons = reasons.concat([`Group (${context}):`, ...groupReasons]);
+      } else if (!groupMatches) {
+        reasons = reasons.concat([`Group (${context}):`, ...groupReasons]);
+      }
+    });
+
+    // Display result
+    testResult.style.display = 'block';
+    if (hasMatchingGroup) {
+      testResult.className = 'test-allowed';
+      testResultText.innerHTML = '<strong>✅ ALLOWED</strong>';
+    } else if (allowPublishers.size === 0) {
+      testResult.className = 'test-unknown';
+      testResultText.innerHTML = '<strong>❓ UNKNOWN</strong> - No explicit constraints found';
+    } else {
+      testResult.className = 'test-denied';
+      testResultText.innerHTML = '<strong>❌ DENIED</strong>';
+    }
+    
+    testResultDetails.innerHTML = reasons.length ? reasons.join('<br>') : 'No matching constraints found.';
   }
 
   function parseNow(){
@@ -324,6 +549,7 @@
     renderTables();
     computeVerdict();
     renderSignals();
+    updateTesterOptions();
   }
 
   // State
@@ -337,6 +563,7 @@
 
   // Wire buttons
   parseBtn.addEventListener('click', parseNow);
+  testBtn.addEventListener('click', testConfiguration);
   clearBtn.addEventListener('click', ()=>{
     input.value='';
     familyChips.innerHTML='';
